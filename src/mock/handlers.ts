@@ -13,6 +13,7 @@ const mock = createMswHandlers({
 });
 
 const SLOW_RESPONSE = false;
+const FORCE_ERROR = false;
 
 export const handlers: Array<HttpHandler> = [
   mock.pick.getMovies({
@@ -36,13 +37,15 @@ export const handlers: Array<HttpHandler> = [
     const body = await request.clone().json();
     await delay(SLOW_RESPONSE ? 1500 : 300);
 
-    return HttpResponse.json(addMovieComment(body));
+    return FORCE_ERROR
+      ? new HttpResponse('Internal Server Error', { status: 500 })
+      : HttpResponse.json(addMovieComment(body));
   }),
   mock.pick.deleteMovieComment(async ({ params }) => {
     await delay(SLOW_RESPONSE ? 2000 : 300);
     const deletedComment = deleteMovieComment(params.id);
 
-    if (deletedComment) {
+    if (deletedComment && !FORCE_ERROR) {
       return HttpResponse.json(deletedComment);
     }
 
