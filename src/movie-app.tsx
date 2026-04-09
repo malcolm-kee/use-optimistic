@@ -5,6 +5,7 @@ import { Helmet } from 'react-helmet';
 import { createBrowserRouter, Link, RouterProvider, useParams } from 'react-router-dom';
 import { useCreateMovieComment, useDeleteMovieComment } from './queries/movie-mutations';
 import { movieQueryOptions } from './queries/movie-queries';
+import { listMovieComments } from './services/sdk';
 import type { CreateMovieCommentDto, MovieCommentDto } from './services/sdk';
 
 let mockingPromise: Promise<unknown> | undefined;
@@ -29,6 +30,7 @@ const MovieAppRoot = () => {
     createBrowserRouter([
       { path: '/', element: <MovieListPage /> },
       { path: '/:movieId', element: <MovieDetailPage /> },
+      { path: '/suspended/:movieId', element: <SuspendedMovieDetailPage /> },
     ])
   );
 
@@ -43,13 +45,27 @@ const MovieAppRoot = () => {
 const MovieListPage = () => {
   const { isLoading, data: movies } = useQuery(movieQueryOptions.movies());
   const [transitioningTo, setTransitioningTo] = React.useState('');
+  const [useSuspense, setUseSuspense] = React.useState(false);
+
+  const linkPrefix = useSuspense ? '/suspended' : '';
 
   return (
     <div className="mx-auto max-w-5xl">
       <Helmet>
         <title>All movies</title>
       </Helmet>
-      <h1 className="mb-6 text-2xl font-bold">Movies</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Movies</h1>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={useSuspense}
+            onChange={(e) => setUseSuspense(e.target.checked)}
+            className="rounded"
+          />
+          Raw Suspense mode
+        </label>
+      </div>
       <ul className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
         {isLoading
           ? Array.from({ length: 8 }).map((_, index) => (
@@ -60,7 +76,7 @@ const MovieListPage = () => {
           : movies?.map((movie) => (
               <li key={movie._id}>
                 <Link
-                  to={`/${movie._id}`}
+                  to={`${linkPrefix}/${movie._id}`}
                   onClick={() => setTransitioningTo(movie._id)}
                   className={clsx(
                     'block transition hover:opacity-100',
@@ -154,6 +170,139 @@ const MovieDetailSkeleton = (props: { commentSection?: React.ReactNode }) => (
     </div>
   </div>
 );
+
+// --- Raw Suspense example using React.use() ---
+
+type SuspendedTab = 'details' | 'comments';
+
+const SuspendedMovieDetailPage = () => {
+  const { movieId } = useParams<{ movieId: string }>();
+  const { data: movie, isLoading } = useQuery(movieQueryOptions.movieDetails(movieId ?? ''));
+  const [activeTab, setActiveTab] = React.useState<SuspendedTab>('details');
+  const [isPending, startTransition] = React.useTransition();
+
+  if (!movieId) {
+    return <p>Movie not found.</p>;
+  }
+
+  const switchTab = (tab: SuspendedTab) => {
+    startTransition(() => {
+      setActiveTab(tab);
+    });
+  };
+
+  console.log({ activeTab });
+
+  return (
+    <div className="mx-auto max-w-5xl">
+      <Helmet>
+        <title>{movie?.title ?? 'Movie'}</title>
+      </Helmet>
+      <Link to="/" className="text-sm text-blue-600 hover:underline">
+        ← All movies
+      </Link>
+      {isLoading && <MovieDetailSkeleton />}
+      {movie && (
+        <article className="mt-4">
+          <div className="flex flex-col md:flex-row md:items-start gap-6">
+            <img src={movie.posterUrl} alt={movie.title} className="md:w-1/3 shrink-0 rounded" />
+            <div className="flex-1">
+              <h1 className="text-3xl font-bold">{movie.title}</h1>
+              <p className="text-sm text-gray-500">{movie.releaseDate}</p>
+
+              {/* Tab buttons */}
+              <div className="mt-6 flex gap-1 border-b border-gray-200">
+                {(['details', 'comments'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => switchTab(tab)}
+                    className={clsx(
+                      'px-4 py-2 text-sm font-medium capitalize transition-colors',
+                      activeTab === tab
+                        ? 'border-b-2 border-blue-600 text-blue-600'
+                        : 'text-gray-500 hover:text-gray-700'
+                    )}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tab content — useTransition keeps old content visible while the new tab suspends */}
+              <div className={clsx('mt-4', isPending && 'opacity-60 transition-opacity')}>
+                <React.Suspense
+                  fallback={
+                    activeTab === 'comments' ? (
+                      <ul className="space-y-3">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <CommentSkeleton key={i} />
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="animate-pulse space-y-2">
+                        <div className="h-4 w-full rounded bg-gray-200" />
+                        <div className="h-4 w-full rounded bg-gray-200" />
+                        <div className="h-4 w-5/6 rounded bg-gray-200" />
+                      </div>
+                    )
+                  }
+                >
+                  {activeTab === 'details' ? (
+                    <p>{movie.overview}</p>
+                  ) : (
+                    <SuspendedCommentList movieId={movieId} />
+                  )}
+                </React.Suspense>
+              </div>
+            </div>
+          </div>
+        </article>
+      )}
+    </div>
+  );
+};
+
+// Promise cache — must live outside the component so it survives Suspense unmounts.
+// Without this, useMemo would re-create the promise on every re-render after suspension,
+// causing an infinite fetch loop.
+const commentsPromiseCache = new Map<string, Promise<MovieCommentDto[]>>();
+
+function fetchComments(movieId: string) {
+  if (!commentsPromiseCache.has(movieId)) {
+    commentsPromiseCache.set(
+      movieId,
+      listMovieComments({ path: { movieId }, throwOnError: true }).then((res) => res.data!)
+    );
+  }
+  return commentsPromiseCache.get(movieId)!;
+}
+
+const SuspendedCommentList = ({ movieId }: { movieId: string }) => {
+  const comments = React.use(fetchComments(movieId));
+
+  if (comments.length === 0) {
+    return <p className="text-gray-500">No comments yet.</p>;
+  }
+
+  return (
+    <ul className="space-y-3">
+      {comments.map((comment) => (
+        <li
+          key={comment._id}
+          className="flex items-start justify-between gap-4 rounded border border-gray-200 p-3"
+        >
+          <div>
+            <p className="text-sm font-medium">
+              {comment.userName} <span className="text-gray-500">· {comment.rating}/10</span>
+            </p>
+            <p className="mt-1">{comment.content}</p>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+};
 
 const CommentSkeleton = () => (
   <li className="flex animate-pulse items-start justify-between gap-4 rounded border border-gray-200 p-3">
