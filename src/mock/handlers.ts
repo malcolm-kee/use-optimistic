@@ -12,8 +12,10 @@ const mock = createMswHandlers({
   baseUrl: 'https://ecomm-service.fly.dev',
 });
 
-const SLOW_RESPONSE = false;
-const FORCE_ERROR = false;
+export const FLAGS = {
+  slowResponse: false,
+  forceError: false,
+};
 
 export const handlers: Array<HttpHandler> = [
   mock.pick.getMovies({
@@ -23,29 +25,29 @@ export const handlers: Array<HttpHandler> = [
     const movie = movieData.find((m) => m._id === params.movieId);
 
     if (movie) {
-      await delay(SLOW_RESPONSE ? faker.helpers.arrayElement([500, 2000]) : 300);
+      await delay(FLAGS.slowResponse ? faker.helpers.arrayElement([500, 2000]) : 300);
       return HttpResponse.json(movie);
     }
 
     return new HttpResponse(null, { status: 404 });
   }),
   mock.pick.listMovieComments(async ({ params }) => {
-    await delay(SLOW_RESPONSE ? 1000 : 300);
+    await delay(FLAGS.slowResponse ? 1000 : 300);
     return HttpResponse.json(getMovieComments(params.movieId));
   }),
   mock.pick.createMovieComment(async ({ request }) => {
     const body = await request.clone().json();
-    await delay(SLOW_RESPONSE ? 1500 : 300);
+    await delay(FLAGS.slowResponse ? 1500 : 300);
 
-    return FORCE_ERROR
+    return FLAGS.forceError
       ? new HttpResponse('Internal Server Error', { status: 500 })
       : HttpResponse.json(addMovieComment(body));
   }),
   mock.pick.deleteMovieComment(async ({ params }) => {
-    await delay(SLOW_RESPONSE ? 2000 : 300);
+    await delay(FLAGS.slowResponse ? 2000 : 300);
     const deletedComment = deleteMovieComment(params.id);
 
-    if (deletedComment && !FORCE_ERROR) {
+    if (deletedComment && !FLAGS.forceError) {
       return HttpResponse.json(deletedComment);
     }
 
