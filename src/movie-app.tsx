@@ -1,11 +1,10 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import * as React from 'react';
 import { Helmet } from 'react-helmet';
 import { createBrowserRouter, Link, RouterProvider, useParams } from 'react-router-dom';
 import { useCreateMovieComment, useDeleteMovieComment } from './queries/movie-mutations';
 import { movieQueryOptions } from './queries/movie-queries';
-import { listMovieComments } from './services/sdk';
 import type { CreateMovieCommentDto, MovieCommentDto } from './services/sdk';
 
 let mockingPromise: Promise<unknown> | undefined;
@@ -87,13 +86,11 @@ const MovieListPage = () => {
                       : 'opacity-90'
                   )}
                 >
-                  <React.ViewTransition name={`movie-poster-${movie._id}`}>
-                    <img
-                      src={movie.posterUrl}
-                      alt={movie.title}
-                      className="aspect-2/3 w-full rounded object-cover"
-                    />
-                  </React.ViewTransition>
+                  <img
+                    src={movie.posterUrl}
+                    alt={movie.title}
+                    className="aspect-2/3 w-full rounded object-cover"
+                  />
                   <p className="mt-2 font-medium">{movie.title}</p>
                   <p className="text-sm text-gray-500">{movie.releaseDate}</p>
                 </Link>
@@ -123,7 +120,7 @@ const MovieDetailPage = () => {
 };
 
 const MovieDetailView = ({ movieId }: { movieId: string }) => {
-  const { data: movie, isLoading } = useSuspenseQuery(movieQueryOptions.movieDetails(movieId));
+  const { data: movie, isLoading } = useQuery(movieQueryOptions.movieDetails(movieId));
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -137,9 +134,7 @@ const MovieDetailView = ({ movieId }: { movieId: string }) => {
       {movie && (
         <article className="mt-4">
           <div className="flex flex-col md:flex-row md:items-start gap-6">
-            <React.ViewTransition name={`movie-poster-${movie._id}`}>
-              <img src={movie.posterUrl} alt={movie.title} className="md:w-1/3 shrink-0 rounded" />
-            </React.ViewTransition>
+            <img src={movie.posterUrl} alt={movie.title} className="md:w-1/3 shrink-0 rounded" />
             <div>
               <h1 className="text-3xl font-bold">{movie.title}</h1>
               <p className="text-sm text-gray-500">{movie.releaseDate}</p>
@@ -190,8 +185,6 @@ const SuspendedMovieDetailPage = () => {
       setActiveTab(tab);
     });
   };
-
-  console.log({ activeTab });
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -251,7 +244,7 @@ const SuspendedMovieDetailPage = () => {
                   {activeTab === 'details' ? (
                     <p>{movie.overview}</p>
                   ) : (
-                    <SuspendedCommentList movieId={movieId} />
+                    <MovieCommentList movieId={movieId} />
                   )}
                 </React.Suspense>
               </div>
@@ -263,25 +256,20 @@ const SuspendedMovieDetailPage = () => {
   );
 };
 
-// Promise cache — must live outside the component so it survives Suspense unmounts.
-// Without this, useMemo would re-create the promise on every re-render after suspension,
-// causing an infinite fetch loop.
-const commentsPromiseCache = new Map<string, Promise<MovieCommentDto[]>>();
+const MovieCommentList = ({ movieId }: { movieId: string }) => {
+  const { data: comments, isLoading } = useQuery(movieQueryOptions.movieComments(movieId));
 
-function fetchComments(movieId: string) {
-  if (!commentsPromiseCache.has(movieId)) {
-    commentsPromiseCache.set(
-      movieId,
-      listMovieComments({ path: { movieId }, throwOnError: true }).then((res) => res.data!)
+  if (isLoading) {
+    return (
+      <ul className="space-y-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <CommentSkeleton key={i} />
+        ))}
+      </ul>
     );
   }
-  return commentsPromiseCache.get(movieId)!;
-}
 
-const SuspendedCommentList = ({ movieId }: { movieId: string }) => {
-  const comments = React.use(fetchComments(movieId));
-
-  if (comments.length === 0) {
+  if (!comments || comments.length === 0) {
     return <p className="text-gray-500">No comments yet.</p>;
   }
 
@@ -319,7 +307,8 @@ const CommentSection = (props: { movieId: string }) => {
   const deleteCommentMutation = useDeleteMovieComment();
   const createCommentMutation = useCreateMovieComment();
 
-  const [comments, setOptimisticComments] = React.useOptimistic(commentsQuery.data);
+  const comments = commentsQuery.data;
+
   return (
     <section className="mt-10">
       <h2 className="mb-4 text-xl font-semibold">Comments</h2>
@@ -330,31 +319,19 @@ const CommentSection = (props: { movieId: string }) => {
           isPending: !commentsQuery.data?.includes(comment),
         }))}
         onDeleteComment={async (comment) =>
-          React.startTransition(async () => {
-            setOptimisticComments((comments) => comments?.filter((c) => c._id !== comment._id));
-            await deleteCommentMutation.mutateAsync({
-              id: comment._id,
-              movieId: comment.movieId,
-            });
+          await deleteCommentMutation.mutateAsync({
+            id: comment._id,
+            movieId: comment.movieId,
           })
         }
+        isDeleting={deleteCommentMutation.isPending}
       />
       <AddMovieCommentForm
         movieId={props.movieId}
         onAddComment={async (body) => {
-          React.startTransition(async () => {
-            setOptimisticComments((comments) => [
-              ...(comments ?? []),
-              {
-                _id: `optimistic-${Date.now()}`,
-                userId: 'optimistic',
-                userName: 'You',
-                ...body,
-              },
-            ]);
-            await createCommentMutation.mutateAsync(body);
-          });
+          await createCommentMutation.mutateAsync(body);
         }}
+        isAdding={createCommentMutation.isPending}
       />
     </section>
   );
@@ -447,6 +424,7 @@ const AddMovieCommentForm = ({
           value={rating}
           onChange={(event) => setRating(Number(event.target.value))}
           className="mt-1 block w-24 rounded border border-gray-300 px-2 py-1"
+          disabled={isAdding}
         />
       </label>
       <label className="block">
@@ -457,6 +435,7 @@ const AddMovieCommentForm = ({
           required
           rows={3}
           className="mt-1 block w-full rounded border border-gray-300 px-2 py-1"
+          disabled={isAdding}
         />
       </label>
       <button

@@ -15,7 +15,7 @@ export const useCreateMovieComment = () => {
     mutationFn: (body: CreateMovieCommentDto) =>
       createMovieComment({ body, throwOnError: true }).then((res) => res.data),
     onSuccess: async (_data, { movieId }) => {
-      await queryClient.invalidateQueries({
+      queryClient.invalidateQueries({
         queryKey: movieQueryOptions.movieComments(movieId).queryKey,
       });
 
@@ -43,7 +43,7 @@ export const useDeleteMovieComment = () => {
         throwOnError: true,
       }).then((res) => res.data),
     onSuccess: async (_data, { movieId }) => {
-      await queryClient.invalidateQueries({
+      queryClient.invalidateQueries({
         queryKey: movieQueryOptions.movieComments(movieId).queryKey,
       });
 
